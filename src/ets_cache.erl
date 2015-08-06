@@ -4,6 +4,7 @@
 %%% File:      ets_cache.erl
 %%%
 %%% @author    Ricardo Tomé Gonçalves <tome.wave@gmail.com>
+%%% @maintainer Tomasz Szarstuk <szarsti@gmail.com>
 %%%
 %%% @doc  
 %%% ets_cache is very(!) simple in-memory cache, using ETS tables in Erlang. 
@@ -31,7 +32,8 @@
             put/3,
             put/4,
             get/2,
-            get/3
+            get/3,
+            through/3
         ]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -103,13 +105,27 @@ get(Cache, Key) ->
 get(Cache, Key, Timeout) ->
     gen_server:call(Cache, {get, Key, Timeout}).
 
+%% @doc Read through cache utility. Looks up cached value and runs function only if not found.
+-spec through(ets_cache(), key(), fun(() -> value())) -> value().
+through(Cache, Key, Fun) ->
+    through(Cache, Key, Fun, undefined).
+
+-spec through(ets_cache(), key(), fun(() -> value()), (undefined | timestamp())) -> value().
+through(Cache, Key, Fun, Timeout) ->
+    case get(Cache, Key, Timeout) of
+        {ok, Value} -> Value;
+        not_found -> 
+            Value = Fun(),
+            put(Cache, Key, Value),
+            Value
+    end.
 
 %% ===================================================================
 %% gen_server Function Exports
 %% ===================================================================
 
 -spec init(non_neg_integer()) -> {ok, ets_cache()}.
-init(Max) ->
+init([Max]) ->
     Table = ets:new(table, [set,private,{keypos,#row.key}]),
     ITable = ets:new(itable, [ordered_set,private,{keypos,#irow.ts}]),
     ets:insert(Table, {dummy, ?CACHE_SIZE, 0}),
