@@ -1,0 +1,7 @@
+{application, ets_cache, [
+  {description, "ETS Cache"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {applications, [kernel, stdlib]},
+  {env, []}
+]}.

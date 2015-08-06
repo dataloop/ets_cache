@@ -1,2 +1,3 @@
-etscache.beam
+/ebin
+/.rebar
 .DS_Store

@@ -24,16 +24,20 @@
 %%%-------------------------------------------------------------------
 
 -module(ets_cache).
+-behaviour(gen_server).
 
--export([   new/1,
+-export([   start_link/1,
+            start_link/2,
             put/3,
             put/4,
             get/2,
-            get/3,
-            destroy/1
+            get/3
         ]).
 
--export_type([ets_cache/0]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2,
+         terminate/2, code_change/3]).
+
+-export_type([cache/0]).
 
 %% @doc Record for ets_cache. 
 %% It has 2 ETS tables, a maximum size and the current size.
@@ -52,33 +56,92 @@
 
 %% @doc Inverted Row, ordered by timestamp to always know the oldest key.
 -record(irow, {
-    ts :: timestamp(),
+    ts :: timestamp() | '_',
     key :: key()
 }).
 
 %% @doc The key name where the current cache size is stored.
 -define(CACHE_SIZE, cache_size).
 
--opaque ets_cache() :: #cache{}.
+-type ets_cache() :: #cache{}.
 -type key() :: any().
 -type value() :: any().
 -type timestamp() :: pos_integer().
+-type cache() :: pid().
+
+%% ===================================================================
+%% API Function Exports
+%% ===================================================================
+
+%% @doc Creates a new named cache with a maximum size.
+-spec start_link(atom(), non_neg_integer()) -> {ok, cache()} | {error, _}.
+start_link(Name, Size) ->
+    gen_server:start_link({local, Name}, ?MODULE, [Size], []).
 
 %% @doc Creates a new cache with a maximum size.
--spec new(non_neg_integer()) -> ets_cache().
-new(Max) ->
+-spec start_link(non_neg_integer()) -> {ok, cache()} | {error, _}.
+start_link(Size) ->
+    gen_server:start_link(?MODULE, [Size], []).
+
+%% @doc Inserts data in cache with the current timestamp.
+-spec put(cache(), key(), value()) -> true.
+put(Cache, Key, Value) ->
+    put(Cache, Key, Value, timestamp()).
+
+%% @doc Inserts data in cache with a given timestamp.
+-spec put(cache(), key(), value(), timestamp()) -> true.
+put(Cache, Key, Value, Now) ->
+    gen_server:call(Cache, {put, Key, Value, Now}).
+
+%% @doc Gets data given the key.
+-spec get(ets_cache(), key()) ->  {ok, value()} | not_found | expired.
+get(Cache, Key) ->
+    get(Cache, Key, undefined).
+
+%% @doc Gets data given the key, if not expired according to the timeout.
+-spec get(ets_cache(), key(), (undefined | timestamp())) -> {ok, value()} | not_found | expired.
+get(Cache, Key, Timeout) ->
+    gen_server:call(Cache, {get, Key, Timeout}).
+
+
+%% ===================================================================
+%% gen_server Function Exports
+%% ===================================================================
+
+-spec init(non_neg_integer()) -> {ok, ets_cache()}.
+init(Max) ->
     Table = ets:new(table, [set,private,{keypos,#row.key}]),
     ITable = ets:new(itable, [ordered_set,private,{keypos,#irow.ts}]),
     ets:insert(Table, {dummy, ?CACHE_SIZE, 0}),
-    #cache{max_size=Max, table=Table, itable=ITable}.
+    {ok, #cache{max_size=Max, table=Table, itable=ITable}}.
 
-%% @doc Inserts data in cache with the current timestamp.
--spec put(ets_cache(), key(), value()) -> true.
-put(C, Key, Value) -> 
-    put(C, Key, Value, timestamp()).
-%% @doc Inserts data in cache with a given timestamp.
--spec put(ets_cache(), key(), value(), timestamp()) -> true.
-put(#cache{max_size=MaxSize, table=Tab, itable=ITab}, Key, Value, Now) ->
+handle_call({put, Key, Value, Now}, _From, State) ->
+    {reply, handle_put(State, Key, Value, Now), State};
+
+handle_call({get, Key, Timeout}, _From, State) ->
+    {reply, handle_get(State, Key, Timeout), State}.
+
+handle_cast(_Msg, State) ->
+    {noreply, State}.
+
+handle_info(_Info, State) ->
+    {noreply, State}.
+
+-spec terminate(any(), ets_cache()) -> ok.
+terminate(_reason, #cache{table=Tab, itable=ITab}) ->
+    ets:delete(Tab),
+    ets:delete(ITab),
+    ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+%% ===================================================================
+%% Internal Function Definitions
+%% ===================================================================
+
+-spec handle_put(ets_cache(), key(), value(), timestamp()) -> true.
+handle_put(#cache{max_size=MaxSize, table=Tab, itable=ITab}, Key, Value, Now) ->
     % try to insert data in primary table -> O(1)
     case ets:insert_new(Tab, #row{key = Key, ts = Now, value = Value}) of
         % key already exists
@@ -111,13 +174,8 @@ put(#cache{max_size=MaxSize, table=Tab, itable=ITab}, Key, Value, Now) ->
     % insert new timestamp for the key -> O(log(N))
     ets:insert(ITab, #irow{ts = Now, key = Key}).
 
-%% @doc Gets data given the key.
--spec get(ets_cache(), key()) ->  {ok, value()} | not_found | expired.
-get(Table, Key) -> 
-    get(Table, Key, undefined).
-%% @doc Gets data given the key, if not expired according to the timeout.
--spec get(ets_cache(), key(), (undefined | timestamp())) -> {ok, value()} | not_found | expired.
-get(#cache{table=Tab}, Key, Timeout) ->
+-spec handle_get(ets_cache(), key(), (undefined | timestamp())) -> {ok, value()} | not_found | expired.
+handle_get(#cache{table=Tab}, Key, Timeout) ->
     % lookup key
     case ets:lookup(Tab, Key) of
         % found key/value
@@ -137,12 +195,6 @@ get(#cache{table=Tab}, Key, Timeout) ->
         [] ->
             not_found
     end.
-
--spec destroy(ets_cache()) -> true.
-destroy(#cache{table=Tab, itable=ITab}) ->
-    ets:delete(Tab),
-    ets:delete(ITab).
-
 
 
 -define(DAYS_FROM_GREGORIAN_BASE_TO_EPOCH, (1970*365+478)).
