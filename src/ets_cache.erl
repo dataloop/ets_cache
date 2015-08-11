@@ -81,10 +81,14 @@ start_link(Name, Size) ->
     gen_server:start_link({local, Name}, ?MODULE, [Size], []).
 
 %% @doc Creates a new cache with a maximum size.
--spec start_link(non_neg_integer()) -> {ok, cache()} | {error, _}.
-start_link(Size) ->
-    gen_server:start_link(?MODULE, [Size], []).
-
+-spec start_link(non_neg_integer()) -> {ok, cache()} | {error, _};
+                (#{name => atom(), size => non_neg_integer()}) -> {ok, cache()} | {error, _}.
+start_link(Size) when is_number(Size) ->
+    gen_server:start_link(?MODULE, [Size], []);
+start_link(Options) when is_map(Options) ->
+    #{name := Name, size := Size} = Options,
+    start_link(Name, Size).
+    
 %% @doc Inserts data in cache with the current timestamp.
 -spec put(cache(), key(), value()) -> true.
 put(Cache, Key, Value) ->
