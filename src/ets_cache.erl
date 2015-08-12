@@ -33,7 +33,8 @@
             put/4,
             get/2,
             get/3,
-            through/3
+            through/3,
+            status/1
         ]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -46,7 +47,9 @@
 -record(cache, {
     max_size :: non_neg_integer(),
     table :: ets:tab(),
-    itable :: ets:tab()
+    itable :: ets:tab(),
+    hit :: non_neg_integer(),
+    miss :: non_neg_integer()
 }).
 
 %% @doc Row with a key, a value and last modified timestamp
@@ -124,6 +127,11 @@ through(Cache, Key, Fun, Timeout) ->
             Value
     end.
 
+-spec status(ets_cache()) -> tuple().
+status(Cache) ->
+    gen_server:call(Cache, {status}).
+
+
 %% ===================================================================
 %% gen_server Function Exports
 %% ===================================================================
@@ -133,13 +141,27 @@ init([Max]) ->
     Table = ets:new(table, [set,private,{keypos,#row.key}]),
     ITable = ets:new(itable, [ordered_set,private,{keypos,#irow.ts}]),
     ets:insert(Table, {dummy, ?CACHE_SIZE, 0}),
-    {ok, #cache{max_size=Max, table=Table, itable=ITable}}.
+    {ok, #cache{max_size=Max, table=Table, itable=ITable, hit=0, miss=0}}.
 
 handle_call({put, Key, Value, Now}, _From, State) ->
     {reply, handle_put(State, Key, Value, Now), State};
 
 handle_call({get, Key, Timeout}, _From, State) ->
-    {reply, handle_get(State, Key, Timeout), State}.
+    Response = handle_get(State, Key, Timeout),
+    S = case Response of
+            {ok, _} -> State#cache{hit=State#cache.hit + 1};
+            _ -> State#cache{miss=State#cache.miss + 1}
+        end,
+    {reply, Response, S};
+
+handle_call({status}, _From, State) ->
+    #cache{table=Table, hit=Hit, miss=Miss} = State,
+    Size = ets:info(Table, size),
+    Ratio = case Hit of
+                0 -> 0;
+                _ -> Hit / (Hit + Miss)
+            end,
+    {reply, {Size, Ratio}, State#cache{hit=0, miss=0}}.
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
