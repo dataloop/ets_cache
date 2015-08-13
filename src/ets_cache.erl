@@ -113,6 +113,8 @@ get(Cache, Key, Timeout) ->
     gen_server:call(Cache, {get, Key, Timeout}).
 
 %% @doc Read through cache utility. Looks up cached value and runs function only if not found.
+%% It asumes that implementation will return {ok, Value} when data fetch is succesfull.
+%% It will not try to cache negative responses
 -spec through(ets_cache(), key(), fun(() -> value())) -> value().
 through(Cache, Key, Fun) ->
     through(Cache, Key, Fun, undefined).
@@ -120,11 +122,15 @@ through(Cache, Key, Fun) ->
 -spec through(ets_cache(), key(), fun(() -> value()), (undefined | timestamp())) -> value().
 through(Cache, Key, Fun, Timeout) ->
     case get(Cache, Key, Timeout) of
-        {ok, Value} -> Value;
+        {ok, Value} -> {ok, Value};
         not_found -> 
-            Value = Fun(),
-            put(Cache, Key, Value),
-            Value
+            case Fun() of
+                {ok, Value} ->
+                    put(Cache, Key, Value),
+                    {ok, Value};
+                Response ->
+                    Response
+            end
     end.
 
 -spec status(ets_cache()) -> tuple().
